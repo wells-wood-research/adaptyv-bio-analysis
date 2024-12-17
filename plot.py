@@ -1,13 +1,15 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
 import argparse
+import os
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import plotly.express as px
+from scipy.stats import pearsonr, spearmanr, ttest_ind
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from sklearn.cluster import KMeans
-from scipy.stats import spearmanr, pearsonr
-import os
 
 
 def load_and_merge_embeddings(df: pd.DataFrame, embeddings_path: str) -> pd.DataFrame:
@@ -15,35 +17,69 @@ def load_and_merge_embeddings(df: pd.DataFrame, embeddings_path: str) -> pd.Data
     embeddings_df = pd.read_csv(embeddings_path)
     df = pd.merge(df, embeddings_df, how="outer", on="sequence")
     # Drop any commonid that is nan
-    df = df.dropna(subset=['common_id'])
+    df = df.dropna(subset=["common_id"])
     return df
 
-
-def visualize_embeddings(
+def visualize_embeddings_interactive(
     df,
-    hue_col,
     method="PCA",
     perplexity=30,
     n_components=2,
     n_clusters=None,
     save_dir=".",
     filter_binding=False,
+    color_by_kd=False,
 ):
     """
-    Visualize protein embeddings using PCA or t-SNE and optionally perform clustering.
+    Interactive visualization of protein embeddings with optional coloring by -log10(kd) or design_type.
 
     Parameters:
-    - filter_binding (bool): If True, filter rows where `binding == TRUE`.
-    """
-    if filter_binding and "binding" in df.columns:
-        df = df[df["binding"] == True]
+    - df (DataFrame): Input dataframe containing embeddings and metadata.
+    - method (str): Dimensionality reduction method ('PCA' or 't-SNE').
+    - perplexity (int): Perplexity parameter for t-SNE (only used for t-SNE).
+    - n_components (int): Number of reduced dimensions (default: 2).
+    - n_clusters (int): Number of clusters for KMeans clustering (default: None).
+    - save_dir (str): Directory to save plots.
+    - filter_binding (bool): If True, only use rows where 'binding' == 'TRUE'.
+    - color_by_kd (bool): If True, color points by -log10(kd); otherwise, use design_type.
 
-    embeddings_df = df[df["esm2_3b_dim_2560"].notna()]  # Filter rows with embeddings
+    Returns:
+    - DataFrame with reduced dimensions and optional clustering.
+    """
+    if filter_binding:
+        df = df[df["binding"] == "TRUE"]
+
+    df = df.copy()
+
+    # Determine the hue column
+    if color_by_kd:
+        if "kd" in df.columns and pd.api.types.is_numeric_dtype(df["kd"]):
+            df["neg_log_kd"] = df["kd"].apply(
+                lambda x: -np.log10(x) if x > 0 else np.nan
+            )
+            hue_col = "neg_log_kd"
+        else:
+            raise ValueError(
+                "Cannot color by kd: 'kd' column is either missing or not numeric."
+            )
+        color_discrete_map = None  # Continuous scale, so no discrete map needed
+    else:
+        hue_col = "design_type"
+        unique_labels = df[hue_col].dropna().unique()
+        # Generate a Plotly color scheme
+        plotly_colors = [px.colors.qualitative.Set1[idx % 10] for idx in range(len(unique_labels))]
+        # Convert Plotly colors to Matplotlib-compatible hex
+        color_discrete_map = {
+            label: rgb_to_hex(color) for label, color in zip(unique_labels, plotly_colors)
+        }
+
+    embeddings_df = df[df["esm2_3b_dim_2560"].notna()]
     embedding_columns = [
         col for col in embeddings_df.columns if col.startswith("esm2_3b")
     ]
     embeddings = embeddings_df[embedding_columns]
 
+    # Dimensionality reduction
     if method == "PCA":
         reducer = PCA(n_components=n_components)
     elif method == "t-SNE":
@@ -61,120 +97,92 @@ def visualize_embeddings(
         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
         embeddings_df["Cluster"] = kmeans.fit_predict(embeddings)
 
-    # Matplotlib scatter plot
-    plt.figure(figsize=(7, 7))
-    plt.scatter(
-        embeddings_df["Component1"],
-        embeddings_df["Component2"],
-        c=embeddings_df[hue_col] if hue_col in embeddings_df else None,
-        cmap="viridis",
-        alpha=0.7,
-        edgecolor="k",
-    )
-    plt.title(f"{method} Visualization of Protein Embeddings", fontsize=14)
-    plt.xlabel("Component 1", fontsize=12)
-    plt.ylabel("Component 2", fontsize=12)
-    plt.colorbar(label=hue_col)
-    plt.grid(alpha=0.3)
-
-    # Save as PDF
-    filename_suffix = "_binding_TRUE" if filter_binding else ""
-    pdf_path = os.path.join(
-        save_dir, f"esm2_3b_{method}_col_by_{hue_col}{filename_suffix}.pdf"
-    )
-    plt.savefig(pdf_path)
-    plt.close()
-
-    print(f"PDF plot saved to {pdf_path}")
-
-    if method == "PCA":
-        print(f"Explained variance by components: {reducer.explained_variance_ratio_}")
-
-
-def visualize_embeddings_interactive(
-    df, hue_col, method='PCA', perplexity=30, n_components=2, n_clusters=None, save_dir=".", filter_binding=False
-):
-    """
-    Interactive visualization of protein embeddings with optional filtering and PDF export.
-
-    Parameters:
-    - df (DataFrame): Input dataframe containing embeddings and metadata.
-    - hue_col (str): Column name to color the plot by.
-    - method (str): Dimensionality reduction method ('PCA' or 't-SNE').
-    - perplexity (int): Perplexity parameter for t-SNE (only used for t-SNE).
-    - n_components (int): Number of reduced dimensions (default: 2).
-    - n_clusters (int): Number of clusters for KMeans clustering (default: None).
-    - save_dir (str): Directory to save plots.
-    - filter_binding (bool): If True, only use rows where 'binding' == 'TRUE'.
-
-    Returns:
-    - DataFrame with reduced dimensions and optional clustering.
-    """
-    if filter_binding:
-        df = df[df['binding'] == "TRUE"]
-
-    embeddings_df = df[df['esm2_3b_dim_2560'].notna()]
-    embedding_columns = [col for col in embeddings_df.columns if col.startswith('esm2_3b')]
-    embeddings = embeddings_df[embedding_columns]
-
-    # Dimensionality reduction
-    if method == 'PCA':
-        reducer = PCA(n_components=n_components)
-    elif method == 't-SNE':
-        reducer = TSNE(n_components=n_components, perplexity=perplexity, random_state=42)
-    else:
-        raise ValueError("Invalid method. Choose 'PCA' or 't-SNE'.")
-
-    reduced_result = reducer.fit_transform(embeddings)
-    embeddings_df['Component1'] = reduced_result[:, 0]
-    embeddings_df['Component2'] = reduced_result[:, 1]
-
-    # Clustering (optional)
-    if n_clusters:
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-        embeddings_df['Cluster'] = kmeans.fit_predict(embeddings)
-
     # Save interactive plot (HTML)
     fig = px.scatter(
         embeddings_df,
-        x='Component1',
-        y='Component2',
+        x="Component1",
+        y="Component2",
         color=hue_col,
-        title=f"{method} of ESM2 3B Embeddings",
-        labels={"Component1": "Component 1", "Component2": "Component 2"},
+        title=f"{method} of ESM2 3B Embeddings ({hue_col})",
+        labels={
+            "Component1": "Component 1",
+            "Component2": "Component 2",
+            hue_col: hue_col,
+        },
         hover_data=["name", "username", "kd"],
-        color_continuous_scale='viridis',
+        color_continuous_scale="viridis" if color_by_kd else None,
+        color_discrete_map=color_discrete_map if not color_by_kd else None,
     )
     fig.update_traces(marker=dict(size=7, opacity=1))
-    fig.update_layout(width=800, height=700)
-
     html_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{hue_col}.html")
     fig.write_html(html_path)
     print(f"Interactive plot saved to {html_path}")
 
     # Save static plot (PDF)
     plt.figure(figsize=(7, 7))
-    plt.scatter(
-        embeddings_df['Component1'],
-        embeddings_df['Component2'],
-        c=embeddings_df[hue_col] if hue_col in embeddings_df else None,
-        cmap='viridis', alpha=0.7, edgecolor='k'
-    )
-    plt.title(f"{method} Visualization of Protein Embeddings", fontsize=14)
+
+    if color_by_kd:
+        scatter = plt.scatter(
+            embeddings_df["Component1"],
+            embeddings_df["Component2"],
+            c=embeddings_df[hue_col],
+            cmap="viridis",
+            alpha=0.7,
+            edgecolor="k",
+        )
+        cbar = plt.colorbar(scatter)
+        cbar.set_label("-log10(kd)", fontsize=12)
+    else:
+        # Convert design_type to numeric values for plotting
+        embeddings_df["hue_numeric"] = embeddings_df[hue_col].map(
+            {label: idx for idx, label in enumerate(unique_labels)}
+        )
+        scatter = plt.scatter(
+            embeddings_df["Component1"],
+            embeddings_df["Component2"],
+            c=embeddings_df["hue_numeric"],
+            cmap="tab10",
+            alpha=0.7,
+            edgecolor="k",
+        )
+        plt.legend(
+            handles=[
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color=rgb_to_hex(color),
+                    label=label,
+                    markersize=10,
+                    linestyle="None",
+                )
+                for label, color in zip(unique_labels, plotly_colors)
+            ],
+            title="Design Type",
+            loc="best",
+        )
+
+    plt.title(f"{method} Visualization of Protein Embeddings ({hue_col})", fontsize=14)
     plt.xlabel("Component 1", fontsize=12)
     plt.ylabel("Component 2", fontsize=12)
-    plt.colorbar(label=hue_col)
     plt.grid(alpha=0.3)
-
     pdf_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{hue_col}.pdf")
     plt.savefig(pdf_path)
     print(f"PDF plot saved to {pdf_path}")
     plt.close()
 
-    if method == 'PCA':
+    if method == "PCA":
         print(f"Explained variance by components: {reducer.explained_variance_ratio_}")
 
     return embeddings_df
+
+
+def rgb_to_hex(rgb: str) -> str:
+    """Convert Plotly 'rgb(r, g, b)' strings to Matplotlib-compatible hex colors."""
+    rgb_values = rgb.replace("rgb(", "").replace(")", "").split(",")
+    return "#{:02x}{:02x}{:02x}".format(
+        int(rgb_values[0]), int(rgb_values[1]), int(rgb_values[2])
+    )
 
 
 def plot_kd_vs_metric(
@@ -205,36 +213,79 @@ def _determine_x_limit(max_value: float) -> float:
 
 
 def compute_correlations(data: pd.DataFrame, output_folder: Path):
-    """Compute Pearson and Spearman correlations for all floating-point metrics and save to CSV."""
-    correlations = []
-    # Select all floating-point columns except 'kd'
+    """
+    Compute Pearson and Spearman correlations for 'kd' and t-tests for associations with 'expression'.
+    Save results to separate files.
+    """
+    correlations_kd = []
+    ttest_expression = []
+
+    # Convert 'expression' to binary: 1 for 'high', 0 for others
+    data["expression_binary"] = data["expression"].apply(
+        lambda x: 1 if x == "high" else 0
+    )
+
+    # Select all floating-point columns except 'kd' and 'expression'
     float_metrics = [
-        col for col in data.select_dtypes(include=["float"]).columns if col != "kd"
+        col
+        for col in data.select_dtypes(include=["float"]).columns
+        if col not in ["kd", "expression"]
     ]
 
     for metric in float_metrics:
-        # Remove NaN values
-        curr_data = data.dropna(subset=[metric, "kd"])
-        # Calculate Pearson correlation and p-value
-        pearson_corr, pearson_pval = pearsonr(curr_data[metric], curr_data["kd"])
-        spearman_corr, spearman_pval = spearmanr(curr_data[metric], curr_data["kd"])
-        correlations.append(
+        # Correlation with 'kd'
+        kd_data = data.dropna(subset=[metric, "kd"])
+        kd_pearson_corr, kd_pearson_pval = pearsonr(kd_data[metric], kd_data["kd"])
+        kd_spearman_corr, kd_spearman_pval = spearmanr(kd_data[metric], kd_data["kd"])
+        correlations_kd.append(
             {
                 "metric": metric,
-                "pearson_correlation": pearson_corr,
-                "pearson_p_value": pearson_pval,
-                "spearman_correlation": spearman_corr,
-                "spearman_p_value": spearman_pval,
+                "pearson_correlation": kd_pearson_corr,
+                "pearson_p_value": kd_pearson_pval,
+                "spearman_correlation": kd_spearman_corr,
+                "spearman_p_value": kd_spearman_pval,
             }
         )
 
-    # Sort and save correlations
-    correlations_df = pd.DataFrame(correlations).sort_values(
+        # T-test for 'expression' groups
+        high_group = data[data["expression_binary"] == 1][metric].dropna()
+        not_high_group = data[data["expression_binary"] == 0][metric].dropna()
+
+        if (
+            len(high_group) > 1 and len(not_high_group) > 1
+        ):  # Ensure enough data for t-test
+            t_stat, p_value = ttest_ind(
+                high_group, not_high_group, equal_var=False
+            )  # Welch's t-test
+        else:
+            t_stat, p_value = None, None
+
+        ttest_expression.append(
+            {
+                "metric": metric,
+                "t_statistic": t_stat,
+                "p_value": p_value,
+                "significant": "yes"
+                if p_value is not None and p_value < 0.05
+                else "no",
+            }
+        )
+
+    # Save KD correlations
+    correlations_kd_df = pd.DataFrame(correlations_kd).sort_values(
         by="spearman_p_value", ascending=True
     )
-    correlations_path = output_folder / "correlations_sorted_by_spearman.csv"
-    correlations_df.to_csv(correlations_path, index=False)
-    print(f"Correlations saved to {correlations_path}")
+    kd_correlations_path = output_folder / "correlations_with_kd.csv"
+    correlations_kd_df.to_csv(kd_correlations_path, index=False)
+    print(f"KD correlations saved to {kd_correlations_path}")
+
+    # Save t-test results for 'expression'
+    ttest_expression_df = pd.DataFrame(ttest_expression).sort_values(
+        by="p_value", ascending=True
+    )
+    ttest_expression_path = output_folder / "ttest_with_expression.csv"
+    ttest_expression_df.to_csv(ttest_expression_path, index=False)
+    print(f"T-test results for expression saved to {ttest_expression_path}")
 
 
 def _create_interactive_plot(
@@ -432,35 +483,32 @@ def main(args):
     data = load_and_merge_embeddings(data, args.embeddings)
 
     # Visualize embeddings (all data)
-    # visualize_embeddings_interactive(
-    #     df=data,
-    #     hue_col="design_type",
-    #     method="PCA",
-    #     save_dir=args.output_folder,
-    # )
-    # visualize_embeddings_interactive(
-    #     df=data,
-    #     hue_col="Cluster" if "Cluster" in data.columns else "design_type",
-    #     method="t-SNE",
-    #     perplexity=30,
-    #     save_dir=args.output_folder,
-    # )
-
-    # Visualize embeddings (binding == TRUE)
     visualize_embeddings_interactive(
         df=data,
-        hue_col="design_type",
         method="PCA",
         save_dir=args.output_folder,
-        filter_binding=True,
     )
     visualize_embeddings_interactive(
         df=data,
-        hue_col="Cluster" if "Cluster" in data.columns else "design_type",
         method="t-SNE",
         perplexity=30,
         save_dir=args.output_folder,
-        filter_binding=True,
+    )
+
+    visualize_embeddings_interactive(
+        df=data,
+        method="PCA",
+        save_dir=args.output_folder,
+        color_by_kd=True,
+    )
+
+    # Color by design_type
+    visualize_embeddings_interactive(
+        df=data,
+        method="t-SNE",
+        perplexity=30,
+        save_dir=args.output_folder,
+        color_by_kd=False,
     )
 
 
