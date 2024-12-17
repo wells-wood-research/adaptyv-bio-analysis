@@ -20,6 +20,7 @@ def load_and_merge_embeddings(df: pd.DataFrame, embeddings_path: str) -> pd.Data
     df = df.dropna(subset=["common_id"])
     return df
 
+
 def visualize_embeddings_interactive(
     df: pd.DataFrame,
     method: str = "PCA",
@@ -55,7 +56,9 @@ def visualize_embeddings_interactive(
     if method == "PCA":
         reducer = PCA(n_components=n_components)
     elif method == "t-SNE":
-        reducer = TSNE(n_components=n_components, perplexity=perplexity, random_state=42)
+        reducer = TSNE(
+            n_components=n_components, perplexity=perplexity, random_state=42
+        )
     else:
         raise ValueError("Invalid method. Choose 'PCA' or 't-SNE'.")
 
@@ -74,7 +77,11 @@ def visualize_embeddings_interactive(
         y="Component2",
         color=color_column,
         title=f"{method} of ESM2 3B Embeddings ({color_column})",
-        labels={"Component1": "Component 1", "Component2": "Component 2", color_column: color_column},
+        labels={
+            "Component1": "Component 1",
+            "Component2": "Component 2",
+            color_column: color_column,
+        },
         hover_data=["name", "kd"] if "kd" in df.columns else ["name"],
         color_continuous_scale="viridis" if color_by_kd else None,
     )
@@ -99,20 +106,20 @@ def visualize_embeddings_interactive(
     else:
         # Categorical: plot each category separately
         unique_categories = embeddings_df[color_column].dropna().unique()
-        cmap = plt.cm.get_cmap("tab10", len(unique_categories))
         for idx, cat in enumerate(unique_categories):
             subset = embeddings_df[embeddings_df[color_column] == cat]
             plt.scatter(
                 subset["Component1"],
                 subset["Component2"],
-                c=[cmap(idx)],
                 label=cat,
                 alpha=0.7,
                 edgecolor="k",
             )
         plt.legend(title="Design Type", loc="best")
 
-    plt.title(f"{method} Visualization of Protein Embeddings ({color_column})", fontsize=14)
+    plt.title(
+        f"{method} Visualization of Protein Embeddings ({color_column})", fontsize=14
+    )
     plt.xlabel("Component 1", fontsize=12)
     plt.ylabel("Component 2", fontsize=12)
     plt.grid(alpha=0.3)
@@ -125,8 +132,6 @@ def visualize_embeddings_interactive(
         print(f"Explained variance ratio: {reducer.explained_variance_ratio_}")
 
     return embeddings_df
-
-
 
 
 def rgb_to_hex(rgb: str) -> str:
@@ -268,11 +273,13 @@ def _plot_single_metric(data: pd.DataFrame, metric: str, output_folder: Path):
     # Matplotlib plot
     fig, ax = plt.subplots(figsize=(7, 5))
     for design, group in data.groupby("design_type"):
-        ax.scatter(group[metric], group["kd"], alpha=0.7, s=50, label=design)
+        ax.scatter(
+            group[metric], group["kd"], alpha=0.7, s=50, label=design, edgecolor="k"
+        )
 
     ax.set_xlabel(metric, fontsize=12)
     ax.set_ylabel("kd (log scale)", fontsize=12)
-    ax.set_xlim(0, x_max)
+    # ax.set_xlim(0, x_max)
     ax.set_yscale("log")
     ax.set_title(f"Log-scale kd vs {metric}", fontsize=14)
     ax.grid()
@@ -299,11 +306,18 @@ def _plot_metric(
     # Matplotlib plot
     fig, ax = plt.subplots(figsize=(7, 5))
     for design, group in data.groupby("design_type"):
-        ax.scatter(group[metric_column], group["kd"], alpha=0.7, s=50, label=design)
+        ax.scatter(
+            group[metric_column],
+            group["kd"],
+            alpha=0.7,
+            s=50,
+            label=design,
+            edgecolor="k",
+        )
 
     ax.set_xlabel(f"{metric_column} ({db_label})", fontsize=12)
     ax.set_ylabel("kd (log scale)", fontsize=12)
-    ax.set_xlim(0, x_max)
+    # ax.set_xlim(0, x_max)
     ax.set_yscale("log")
     ax.set_title(f"Log-scale kd vs {metric_column} ({db_label})", fontsize=14)
     ax.grid()
@@ -333,10 +347,10 @@ def _plot_metric_both(data: pd.DataFrame, metric: str, output_folder: Path):
         x_max_swissprot = _determine_x_limit(data[swissprot_column].max())
         for design, group in data.groupby("design_type"):
             axes[0].scatter(
-                group[swissprot_column], group["kd"], alpha=0.7, s=50, label=design
+                group[swissprot_column], group["kd"], alpha=0.7, s=50, label=design, edgecolor="k"
             )
         axes[0].set_xlabel(f"{swissprot_column} (SwissProt)", fontsize=12)
-        axes[0].set_xlim(0, x_max_swissprot)
+        # axes[0].set_xlim(0, x_max_swissprot)
         axes[0].set_ylabel("kd (log scale)", fontsize=12)
         axes[0].set_title(
             f"Log-scale kd vs {swissprot_column} (SwissProt)", fontsize=14
@@ -360,10 +374,10 @@ def _plot_metric_both(data: pd.DataFrame, metric: str, output_folder: Path):
         x_max_pdb = _determine_x_limit(data[pdb_column].max())
         for design, group in data.groupby("design_type"):
             axes[1].scatter(
-                group[pdb_column], group["kd"], alpha=0.7, s=50, label=design
+                group[pdb_column], group["kd"], alpha=0.7, s=50, label=design, edgecolor="k"
             )
         axes[1].set_xlabel(f"{pdb_column} (PDB)", fontsize=12)
-        axes[1].set_xlim(0, x_max_pdb)
+        # axes[1].set_xlim(0, x_max_pdb)
         axes[1].set_title(f"Log-scale kd vs {pdb_column} (PDB)", fontsize=14)
         axes[1].grid()
 
@@ -424,6 +438,11 @@ def main(args):
         "qtmscore",
         "fident",
         "similarity_check",
+        "rosetta_hbond_bb_sc_per_aa",
+        "evoef2_interS_total_per_aa",
+        "composition_ASN",
+        "rosetta_hbond_lr_bb_per_aa",
+        "rosetta_lk_ball_wtd_per_aa",
     ]
 
     validate_required_columns(data, args.database, metrics)
@@ -447,6 +466,7 @@ def main(args):
         save_dir=args.output_folder,
     )
 
+    # Binding only
     visualize_embeddings_interactive(
         df=data,
         method="PCA",
