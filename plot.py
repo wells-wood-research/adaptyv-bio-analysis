@@ -21,71 +21,41 @@ def load_and_merge_embeddings(df: pd.DataFrame, embeddings_path: str) -> pd.Data
     return df
 
 def visualize_embeddings_interactive(
-    df,
-    method="PCA",
-    perplexity=30,
-    n_components=2,
-    n_clusters=None,
-    save_dir=".",
-    filter_binding=False,
-    color_by_kd=False,
+    df: pd.DataFrame,
+    method: str = "PCA",
+    perplexity: int = 30,
+    n_components: int = 2,
+    n_clusters: int = None,
+    save_dir: str = ".",
+    filter_binding: bool = False,
+    color_by_kd: bool = False,
 ):
     """
     Interactive visualization of protein embeddings with optional coloring by -log10(kd) or design_type.
-
-    Parameters:
-    - df (DataFrame): Input dataframe containing embeddings and metadata.
-    - method (str): Dimensionality reduction method ('PCA' or 't-SNE').
-    - perplexity (int): Perplexity parameter for t-SNE (only used for t-SNE).
-    - n_components (int): Number of reduced dimensions (default: 2).
-    - n_clusters (int): Number of clusters for KMeans clustering (default: None).
-    - save_dir (str): Directory to save plots.
-    - filter_binding (bool): If True, only use rows where 'binding' == 'TRUE'.
-    - color_by_kd (bool): If True, color points by -log10(kd); otherwise, use design_type.
-
-    Returns:
-    - DataFrame with reduced dimensions and optional clustering.
     """
     if filter_binding:
         df = df[df["binding"] == "TRUE"]
-
     df = df.copy()
 
-    # Determine the hue column
+    # Set the color column
     if color_by_kd:
-        if "kd" in df.columns and pd.api.types.is_numeric_dtype(df["kd"]):
-            df["neg_log_kd"] = df["kd"].apply(
-                lambda x: -np.log10(x) if x > 0 else np.nan
-            )
-            hue_col = "neg_log_kd"
-        else:
-            raise ValueError(
-                "Cannot color by kd: 'kd' column is either missing or not numeric."
-            )
-        color_discrete_map = None  # Continuous scale, so no discrete map needed
+        if "kd" not in df.columns or not pd.api.types.is_numeric_dtype(df["kd"]):
+            raise ValueError("Cannot color by kd: 'kd' column missing or not numeric.")
+        df["neg_log_kd"] = df["kd"].apply(lambda x: -np.log10(x) if x > 0 else np.nan)
+        color_column = "neg_log_kd"
     else:
-        hue_col = "design_type"
-        unique_labels = df[hue_col].dropna().unique()
-        # Generate a Plotly color scheme
-        plotly_colors = [px.colors.qualitative.Set1[idx % 10] for idx in range(len(unique_labels))]
-        # Convert Plotly colors to Matplotlib-compatible hex
-        color_discrete_map = {
-            label: rgb_to_hex(color) for label, color in zip(unique_labels, plotly_colors)
-        }
+        color_column = "design_type"
 
-    embeddings_df = df[df["esm2_3b_dim_2560"].notna()]
-    embedding_columns = [
-        col for col in embeddings_df.columns if col.startswith("esm2_3b")
-    ]
+    # Filter embeddings
+    embedding_columns = [col for col in df.columns if col.startswith("esm2_3b")]
+    embeddings_df = df.dropna(subset=embedding_columns)
     embeddings = embeddings_df[embedding_columns]
 
     # Dimensionality reduction
     if method == "PCA":
         reducer = PCA(n_components=n_components)
     elif method == "t-SNE":
-        reducer = TSNE(
-            n_components=n_components, perplexity=perplexity, random_state=42
-        )
+        reducer = TSNE(n_components=n_components, perplexity=perplexity, random_state=42)
     else:
         raise ValueError("Invalid method. Choose 'PCA' or 't-SNE'.")
 
@@ -97,35 +67,29 @@ def visualize_embeddings_interactive(
         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
         embeddings_df["Cluster"] = kmeans.fit_predict(embeddings)
 
-    # Save interactive plot (HTML)
+    # Plotly interactive plot
     fig = px.scatter(
         embeddings_df,
         x="Component1",
         y="Component2",
-        color=hue_col,
-        title=f"{method} of ESM2 3B Embeddings ({hue_col})",
-        labels={
-            "Component1": "Component 1",
-            "Component2": "Component 2",
-            hue_col: hue_col,
-        },
-        hover_data=["name", "username", "kd"],
+        color=color_column,
+        title=f"{method} of ESM2 3B Embeddings ({color_column})",
+        labels={"Component1": "Component 1", "Component2": "Component 2", color_column: color_column},
+        hover_data=["name", "kd"] if "kd" in df.columns else ["name"],
         color_continuous_scale="viridis" if color_by_kd else None,
-        color_discrete_map=color_discrete_map if not color_by_kd else None,
     )
-    fig.update_traces(marker=dict(size=7, opacity=1))
-    html_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{hue_col}.html")
+    html_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{color_column}.html")
     fig.write_html(html_path)
     print(f"Interactive plot saved to {html_path}")
 
-    # Save static plot (PDF)
+    # Matplotlib static plot
     plt.figure(figsize=(7, 7))
-
     if color_by_kd:
+        # Continuous
         scatter = plt.scatter(
             embeddings_df["Component1"],
             embeddings_df["Component2"],
-            c=embeddings_df[hue_col],
+            c=embeddings_df[color_column],
             cmap="viridis",
             alpha=0.7,
             edgecolor="k",
@@ -133,48 +97,36 @@ def visualize_embeddings_interactive(
         cbar = plt.colorbar(scatter)
         cbar.set_label("-log10(kd)", fontsize=12)
     else:
-        # Convert design_type to numeric values for plotting
-        embeddings_df["hue_numeric"] = embeddings_df[hue_col].map(
-            {label: idx for idx, label in enumerate(unique_labels)}
-        )
-        scatter = plt.scatter(
-            embeddings_df["Component1"],
-            embeddings_df["Component2"],
-            c=embeddings_df["hue_numeric"],
-            cmap="tab10",
-            alpha=0.7,
-            edgecolor="k",
-        )
-        plt.legend(
-            handles=[
-                plt.Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    color=rgb_to_hex(color),
-                    label=label,
-                    markersize=10,
-                    linestyle="None",
-                )
-                for label, color in zip(unique_labels, plotly_colors)
-            ],
-            title="Design Type",
-            loc="best",
-        )
+        # Categorical: plot each category separately
+        unique_categories = embeddings_df[color_column].dropna().unique()
+        cmap = plt.cm.get_cmap("tab10", len(unique_categories))
+        for idx, cat in enumerate(unique_categories):
+            subset = embeddings_df[embeddings_df[color_column] == cat]
+            plt.scatter(
+                subset["Component1"],
+                subset["Component2"],
+                c=[cmap(idx)],
+                label=cat,
+                alpha=0.7,
+                edgecolor="k",
+            )
+        plt.legend(title="Design Type", loc="best")
 
-    plt.title(f"{method} Visualization of Protein Embeddings ({hue_col})", fontsize=14)
+    plt.title(f"{method} Visualization of Protein Embeddings ({color_column})", fontsize=14)
     plt.xlabel("Component 1", fontsize=12)
     plt.ylabel("Component 2", fontsize=12)
     plt.grid(alpha=0.3)
-    pdf_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{hue_col}.pdf")
+    pdf_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{color_column}.pdf")
     plt.savefig(pdf_path)
-    print(f"PDF plot saved to {pdf_path}")
+    print(f"Static plot saved to {pdf_path}")
     plt.close()
 
     if method == "PCA":
-        print(f"Explained variance by components: {reducer.explained_variance_ratio_}")
+        print(f"Explained variance ratio: {reducer.explained_variance_ratio_}")
 
     return embeddings_df
+
+
 
 
 def rgb_to_hex(rgb: str) -> str:
