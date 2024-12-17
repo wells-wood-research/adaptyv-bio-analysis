@@ -3,7 +3,178 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import argparse
 import plotly.express as px
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from sklearn.cluster import KMeans
 from scipy.stats import spearmanr, pearsonr
+import os
+
+
+def load_and_merge_embeddings(df: pd.DataFrame, embeddings_path: str) -> pd.DataFrame:
+    """Load embeddings and merge with the input dataset."""
+    embeddings_df = pd.read_csv(embeddings_path)
+    df = pd.merge(df, embeddings_df, how="outer", on="sequence")
+    # Drop any commonid that is nan
+    df = df.dropna(subset=['common_id'])
+    return df
+
+
+def visualize_embeddings(
+    df,
+    hue_col,
+    method="PCA",
+    perplexity=30,
+    n_components=2,
+    n_clusters=None,
+    save_dir=".",
+    filter_binding=False,
+):
+    """
+    Visualize protein embeddings using PCA or t-SNE and optionally perform clustering.
+
+    Parameters:
+    - filter_binding (bool): If True, filter rows where `binding == TRUE`.
+    """
+    if filter_binding and "binding" in df.columns:
+        df = df[df["binding"] == True]
+
+    embeddings_df = df[df["esm2_3b_dim_2560"].notna()]  # Filter rows with embeddings
+    embedding_columns = [
+        col for col in embeddings_df.columns if col.startswith("esm2_3b")
+    ]
+    embeddings = embeddings_df[embedding_columns]
+
+    if method == "PCA":
+        reducer = PCA(n_components=n_components)
+    elif method == "t-SNE":
+        reducer = TSNE(
+            n_components=n_components, perplexity=perplexity, random_state=42
+        )
+    else:
+        raise ValueError("Invalid method. Choose 'PCA' or 't-SNE'.")
+
+    reduced_result = reducer.fit_transform(embeddings)
+    embeddings_df["Component1"] = reduced_result[:, 0]
+    embeddings_df["Component2"] = reduced_result[:, 1]
+
+    if n_clusters:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        embeddings_df["Cluster"] = kmeans.fit_predict(embeddings)
+
+    # Matplotlib scatter plot
+    plt.figure(figsize=(7, 7))
+    plt.scatter(
+        embeddings_df["Component1"],
+        embeddings_df["Component2"],
+        c=embeddings_df[hue_col] if hue_col in embeddings_df else None,
+        cmap="viridis",
+        alpha=0.7,
+        edgecolor="k",
+    )
+    plt.title(f"{method} Visualization of Protein Embeddings", fontsize=14)
+    plt.xlabel("Component 1", fontsize=12)
+    plt.ylabel("Component 2", fontsize=12)
+    plt.colorbar(label=hue_col)
+    plt.grid(alpha=0.3)
+
+    # Save as PDF
+    filename_suffix = "_binding_TRUE" if filter_binding else ""
+    pdf_path = os.path.join(
+        save_dir, f"esm2_3b_{method}_col_by_{hue_col}{filename_suffix}.pdf"
+    )
+    plt.savefig(pdf_path)
+    plt.close()
+
+    print(f"PDF plot saved to {pdf_path}")
+
+    if method == "PCA":
+        print(f"Explained variance by components: {reducer.explained_variance_ratio_}")
+
+
+def visualize_embeddings_interactive(
+    df, hue_col, method='PCA', perplexity=30, n_components=2, n_clusters=None, save_dir=".", filter_binding=False
+):
+    """
+    Interactive visualization of protein embeddings with optional filtering and PDF export.
+
+    Parameters:
+    - df (DataFrame): Input dataframe containing embeddings and metadata.
+    - hue_col (str): Column name to color the plot by.
+    - method (str): Dimensionality reduction method ('PCA' or 't-SNE').
+    - perplexity (int): Perplexity parameter for t-SNE (only used for t-SNE).
+    - n_components (int): Number of reduced dimensions (default: 2).
+    - n_clusters (int): Number of clusters for KMeans clustering (default: None).
+    - save_dir (str): Directory to save plots.
+    - filter_binding (bool): If True, only use rows where 'binding' == 'TRUE'.
+
+    Returns:
+    - DataFrame with reduced dimensions and optional clustering.
+    """
+    if filter_binding:
+        df = df[df['binding'] == "TRUE"]
+
+    embeddings_df = df[df['esm2_3b_dim_2560'].notna()]
+    embedding_columns = [col for col in embeddings_df.columns if col.startswith('esm2_3b')]
+    embeddings = embeddings_df[embedding_columns]
+
+    # Dimensionality reduction
+    if method == 'PCA':
+        reducer = PCA(n_components=n_components)
+    elif method == 't-SNE':
+        reducer = TSNE(n_components=n_components, perplexity=perplexity, random_state=42)
+    else:
+        raise ValueError("Invalid method. Choose 'PCA' or 't-SNE'.")
+
+    reduced_result = reducer.fit_transform(embeddings)
+    embeddings_df['Component1'] = reduced_result[:, 0]
+    embeddings_df['Component2'] = reduced_result[:, 1]
+
+    # Clustering (optional)
+    if n_clusters:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        embeddings_df['Cluster'] = kmeans.fit_predict(embeddings)
+
+    # Save interactive plot (HTML)
+    fig = px.scatter(
+        embeddings_df,
+        x='Component1',
+        y='Component2',
+        color=hue_col,
+        title=f"{method} of ESM2 3B Embeddings",
+        labels={"Component1": "Component 1", "Component2": "Component 2"},
+        hover_data=["name", "username", "kd"],
+        color_continuous_scale='viridis',
+    )
+    fig.update_traces(marker=dict(size=7, opacity=1))
+    fig.update_layout(width=800, height=700)
+
+    html_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{hue_col}.html")
+    fig.write_html(html_path)
+    print(f"Interactive plot saved to {html_path}")
+
+    # Save static plot (PDF)
+    plt.figure(figsize=(7, 7))
+    plt.scatter(
+        embeddings_df['Component1'],
+        embeddings_df['Component2'],
+        c=embeddings_df[hue_col] if hue_col in embeddings_df else None,
+        cmap='viridis', alpha=0.7, edgecolor='k'
+    )
+    plt.title(f"{method} Visualization of Protein Embeddings", fontsize=14)
+    plt.xlabel("Component 1", fontsize=12)
+    plt.ylabel("Component 2", fontsize=12)
+    plt.colorbar(label=hue_col)
+    plt.grid(alpha=0.3)
+
+    pdf_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{hue_col}.pdf")
+    plt.savefig(pdf_path)
+    print(f"PDF plot saved to {pdf_path}")
+    plt.close()
+
+    if method == 'PCA':
+        print(f"Explained variance by components: {reducer.explained_variance_ratio_}")
+
+    return embeddings_df
 
 
 def plot_kd_vs_metric(
@@ -258,12 +429,51 @@ def main(args):
     for metric in metrics:
         plot_kd_vs_metric(data, metric, args.output_folder, args.database)
 
+    data = load_and_merge_embeddings(data, args.embeddings)
+
+    # Visualize embeddings (all data)
+    # visualize_embeddings_interactive(
+    #     df=data,
+    #     hue_col="design_type",
+    #     method="PCA",
+    #     save_dir=args.output_folder,
+    # )
+    # visualize_embeddings_interactive(
+    #     df=data,
+    #     hue_col="Cluster" if "Cluster" in data.columns else "design_type",
+    #     method="t-SNE",
+    #     perplexity=30,
+    #     save_dir=args.output_folder,
+    # )
+
+    # Visualize embeddings (binding == TRUE)
+    visualize_embeddings_interactive(
+        df=data,
+        hue_col="design_type",
+        method="PCA",
+        save_dir=args.output_folder,
+        filter_binding=True,
+    )
+    visualize_embeddings_interactive(
+        df=data,
+        hue_col="Cluster" if "Cluster" in data.columns else "design_type",
+        method="t-SNE",
+        perplexity=30,
+        save_dir=args.output_folder,
+        filter_binding=True,
+    )
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate plots for kd vs features.")
+    parser = argparse.ArgumentParser(
+        description="Generate plots and embedding visualizations."
+    )
     parser.add_argument("--input", type=str, required=True, help="Path to input file.")
     parser.add_argument(
-        "--output_folder", type=str, required=True, help="Output folder."
+        "--embeddings", type=str, required=True, help="Path to embeddings file."
+    )
+    parser.add_argument(
+        "--output_folder", type=str, required=True, help="Path to output folder."
     )
     parser.add_argument(
         "--database",

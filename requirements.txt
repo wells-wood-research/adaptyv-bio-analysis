@@ -1,3 +1,4 @@
 seaborn
 plotly
 scipy
+scikit-learn

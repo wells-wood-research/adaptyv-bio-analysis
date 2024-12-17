@@ -359,3 +359,4 @@ cython_debug/
 #.idea/
 
 data/foldseek/output_per_structure
+data/esm_embeddings
