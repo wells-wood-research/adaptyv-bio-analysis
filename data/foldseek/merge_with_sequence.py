@@ -1,14 +1,14 @@
 import pandas as pd
 import argparse
 
-def merge_datasets(foldseek_file, similarity_file, output_file):
-    # Load Foldseek merged results
+def merge_datasets(foldseek_file: str, similarity_file: str, output_file: str) -> None:
+    # Load Foldseek merged results (tab-delimited)
     foldseek_df = pd.read_csv(foldseek_file, sep='\t')
+    
+    # Load sequence similarity dataset (comma-delimited)
+    similarity_df = pd.read_csv(similarity_file, sep=',')
 
-    # Load sequence similarity dataset
-    similarity_df = pd.read_csv(similarity_file)
-
-    # Merge datasets on the 'common_id' column
+    # Merge datasets: left join on 'common_id' (Foldseek) and 'id' (similarity)
     merged_df = pd.merge(
         foldseek_df, 
         similarity_df, 
@@ -17,7 +17,7 @@ def merge_datasets(foldseek_file, similarity_file, output_file):
         how='left'
     )
 
-    # Save the merged dataframe to a file
+    # Save the merged dataframe to a file (tab-delimited)
     merged_df.to_csv(output_file, sep='\t', index=False)
 
     print(f"Merged dataset saved to {output_file}")
