@@ -1,15 +1,135 @@
 import argparse
 import os
+import typing as t
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import seaborn as sns
+
 from scipy.stats import pearsonr, spearmanr, ttest_ind
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_curve, roc_auc_score
+
+
+def validate_required_columns(data: pd.DataFrame, database: str, metrics: t.List[str]):
+    """
+    Validate that all required columns for the selected database exist in the dataset.
+
+    Parameters
+    ----------
+    data: pd.DataFrame
+        Input dataset
+    database: str
+        Database to use: swissprot, pdb, or both
+    metrics: list
+        List of metrics to validate
+    """
+    required_columns = ["kd", "design_type"]
+
+    for metric in metrics:
+        has_swissprot = f"{metric}_swissprot" in data.columns
+        has_pdb = f"{metric}_pdb" in data.columns
+
+        if database in ["swissprot", "both"] and has_swissprot:
+            required_columns.append(f"{metric}_swissprot")
+        if database in ["pdb", "both"] and has_pdb:
+            required_columns.append(f"{metric}_pdb")
+
+        if not has_swissprot and not has_pdb:
+            required_columns.append(metric)
+
+    missing_columns = [col for col in required_columns if col not in data.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
+
+
+def compute_correlations(data: pd.DataFrame, output_folder: Path) -> None:
+    """
+    Compute Pearson and Spearman correlations for 'kd' and t-tests for associations with 'expression'. Save results to separate files.
+
+    Parameters
+    ----------
+    data: pd.DataFrame
+        Input dataset
+    output_folder: Path
+        Output folder to save results
+    """
+    correlations_kd = []
+    ttest_expression = []
+
+    # Convert 'expression' to binary: 1 for 'high', 0 for others
+    data["expression_binary"] = data["expression"].apply(
+        lambda x: 1 if x == "high" else 0
+    )
+
+    # Select all floating-point columns except 'kd' and 'expression'
+    float_metrics = [
+        col
+        for col in data.select_dtypes(include=["float"]).columns
+        if col not in ["kd", "expression"]
+    ]
+
+    for metric in float_metrics:
+        # Correlation with 'kd'
+        kd_data = data.dropna(subset=[metric, "kd"])
+        kd_pearson_corr, kd_pearson_pval = pearsonr(kd_data[metric], kd_data["kd"])
+        kd_spearman_corr, kd_spearman_pval = spearmanr(kd_data[metric], kd_data["kd"])
+        correlations_kd.append(
+            {
+                "metric": metric,
+                "pearson_correlation": kd_pearson_corr,
+                "pearson_p_value": kd_pearson_pval,
+                "spearman_correlation": kd_spearman_corr,
+                "spearman_p_value": kd_spearman_pval,
+            }
+        )
+
+        # T-test for 'expression' groups
+        high_group = data[data["expression_binary"] == 1][metric].dropna()
+        not_high_group = data[data["expression_binary"] == 0][metric].dropna()
+
+        if (
+            len(high_group) > 1 and len(not_high_group) > 1
+        ):  # Ensure enough data for t-test
+            t_stat, p_value = ttest_ind(
+                high_group, not_high_group, equal_var=False
+            )  # Welch's t-test
+        else:
+            t_stat, p_value = None, None
+
+        ttest_expression.append(
+            {
+                "metric": metric,
+                "t_statistic": t_stat,
+                "p_value": p_value,
+                "significant": "yes"
+                if p_value is not None and p_value < 0.05
+                else "no",
+            }
+        )
+
+    # Save KD correlations
+    correlations_kd_df = pd.DataFrame(correlations_kd).sort_values(
+        by="spearman_p_value", ascending=True
+    )
+    kd_correlations_path = output_folder / "correlations_with_kd.csv"
+    correlations_kd_df.to_csv(kd_correlations_path, index=False)
+    print(f"KD correlations saved to {kd_correlations_path}")
+
+    # Save t-test results for 'expression'
+    ttest_expression_df = pd.DataFrame(ttest_expression).sort_values(
+        by="p_value", ascending=True
+    )
+    ttest_expression_path = output_folder / "ttest_with_expression.csv"
+    ttest_expression_df.to_csv(ttest_expression_path, index=False)
+    print(f"T-test results for expression saved to {ttest_expression_path}")
+
 
 
 def load_and_merge_embeddings(df: pd.DataFrame, embeddings_path: str) -> pd.DataFrame:
@@ -169,80 +289,7 @@ def _determine_x_limit(max_value: float) -> float:
     return 1 if abs(max_value - 1) < abs(max_value - 100) else 100
 
 
-def compute_correlations(data: pd.DataFrame, output_folder: Path):
-    """
-    Compute Pearson and Spearman correlations for 'kd' and t-tests for associations with 'expression'.
-    Save results to separate files.
-    """
-    correlations_kd = []
-    ttest_expression = []
 
-    # Convert 'expression' to binary: 1 for 'high', 0 for others
-    data["expression_binary"] = data["expression"].apply(
-        lambda x: 1 if x == "high" else 0
-    )
-
-    # Select all floating-point columns except 'kd' and 'expression'
-    float_metrics = [
-        col
-        for col in data.select_dtypes(include=["float"]).columns
-        if col not in ["kd", "expression"]
-    ]
-
-    for metric in float_metrics:
-        # Correlation with 'kd'
-        kd_data = data.dropna(subset=[metric, "kd"])
-        kd_pearson_corr, kd_pearson_pval = pearsonr(kd_data[metric], kd_data["kd"])
-        kd_spearman_corr, kd_spearman_pval = spearmanr(kd_data[metric], kd_data["kd"])
-        correlations_kd.append(
-            {
-                "metric": metric,
-                "pearson_correlation": kd_pearson_corr,
-                "pearson_p_value": kd_pearson_pval,
-                "spearman_correlation": kd_spearman_corr,
-                "spearman_p_value": kd_spearman_pval,
-            }
-        )
-
-        # T-test for 'expression' groups
-        high_group = data[data["expression_binary"] == 1][metric].dropna()
-        not_high_group = data[data["expression_binary"] == 0][metric].dropna()
-
-        if (
-            len(high_group) > 1 and len(not_high_group) > 1
-        ):  # Ensure enough data for t-test
-            t_stat, p_value = ttest_ind(
-                high_group, not_high_group, equal_var=False
-            )  # Welch's t-test
-        else:
-            t_stat, p_value = None, None
-
-        ttest_expression.append(
-            {
-                "metric": metric,
-                "t_statistic": t_stat,
-                "p_value": p_value,
-                "significant": "yes"
-                if p_value is not None and p_value < 0.05
-                else "no",
-            }
-        )
-
-    # Save KD correlations
-    correlations_kd_df = pd.DataFrame(correlations_kd).sort_values(
-        by="spearman_p_value", ascending=True
-    )
-    kd_correlations_path = output_folder / "correlations_with_kd.csv"
-    correlations_kd_df.to_csv(kd_correlations_path, index=False)
-    print(f"KD correlations saved to {kd_correlations_path}")
-
-    # Save t-test results for 'expression'
-    ttest_expression_df = pd.DataFrame(ttest_expression).sort_values(
-        by="p_value", ascending=True
-    )
-    ttest_expression_path = output_folder / "ttest_with_expression.csv"
-    ttest_expression_df.to_csv(ttest_expression_path, index=False)
-    print(f"T-test results for expression saved to {ttest_expression_path}")
 
 
 def _create_interactive_plot(
@@ -347,7 +394,12 @@ def _plot_metric_both(data: pd.DataFrame, metric: str, output_folder: Path):
         x_max_swissprot = _determine_x_limit(data[swissprot_column].max())
         for design, group in data.groupby("design_type"):
             axes[0].scatter(
-                group[swissprot_column], group["kd"], alpha=0.7, s=50, label=design, edgecolor="k"
+                group[swissprot_column],
+                group["kd"],
+                alpha=0.7,
+                s=50,
+                label=design,
+                edgecolor="k",
             )
         axes[0].set_xlabel(f"{swissprot_column} (SwissProt)", fontsize=12)
         # axes[0].set_xlim(0, x_max_swissprot)
@@ -374,7 +426,12 @@ def _plot_metric_both(data: pd.DataFrame, metric: str, output_folder: Path):
         x_max_pdb = _determine_x_limit(data[pdb_column].max())
         for design, group in data.groupby("design_type"):
             axes[1].scatter(
-                group[pdb_column], group["kd"], alpha=0.7, s=50, label=design, edgecolor="k"
+                group[pdb_column],
+                group["kd"],
+                alpha=0.7,
+                s=50,
+                label=design,
+                edgecolor="k",
             )
         axes[1].set_xlabel(f"{pdb_column} (PDB)", fontsize=12)
         # axes[1].set_xlim(0, x_max_pdb)
@@ -395,6 +452,103 @@ def _plot_metric_both(data: pd.DataFrame, metric: str, output_folder: Path):
     pdf_path = output_folder / f"kd_vs_{metric}_both.pdf"
     plt.savefig(pdf_path)
     plt.close()
+
+
+def plot_expression_histogram(
+    data: pd.DataFrame, output_folder: Path, metrics: t.List[str]
+):
+    """Plot histograms of expression levels for high and low expression groups. """
+
+    for metric in metrics:
+        # Extract metric
+        high_group = data[data["expression_binary"] == 1][metric].dropna()
+        not_high_group = data[data["expression_binary"] == 0][metric].dropna()
+        # Plot KDE
+        fig, ax = plt.subplots(figsize=(5, 5))
+        sns.kdeplot(
+            high_group,
+            fill=True,
+            color="skyblue",
+            label="High Expression",
+            alpha=0.5,
+            ax=ax,
+        )
+        sns.kdeplot(
+            not_high_group,
+            fill=True,
+            color="darkorange",
+            label="Other Expression",
+            alpha=0.5,
+            ax=ax,
+        )
+        ax.set_xlabel(metric, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.set_title(f"{metric} \n by Expression Level", fontsize=14)
+        ax.legend()
+        ax.grid()
+        plt.tight_layout()
+        pdf_path = output_folder / f"expression_kde_{metric}.pdf"
+        plt.savefig(pdf_path)
+        plt.close()
+        print(f"Expression KDE saved to {pdf_path}")
+
+
+def calculate_and_plot_auroc(
+    data: pd.DataFrame, output_folder: Path, metrics: t.List[str]
+):
+    """
+    Calculate AUROC for metrics, save results to a file, and plot ROC curves for top 5 metrics.
+    """
+    """
+    Calculate AUROC for metrics, save results to a file, and plot ROC curves for top 5 metrics.
+    """
+    auroc_results = []
+
+    for metric in metrics:
+        try:
+            # Drop NaN values and ensure alignment between true labels and scores
+            valid_data = data[["expression_binary", metric]].dropna()
+            y_true = valid_data["expression_binary"]
+            y_score = valid_data[metric]
+
+            # Calculate AUROC and ROC curve
+            auroc = roc_auc_score(y_true, y_score)
+            fpr, tpr, _ = roc_curve(y_true, y_score)
+            auroc_results.append(
+                {"Metric": metric, "AUROC": auroc, "FPR": fpr, "TPR": tpr}
+            )
+        except ValueError:
+            print(f"Skipping metric {metric} due to insufficient data.")
+            continue
+
+    # Create results DataFrame and save to CSV
+    auroc_df = pd.DataFrame(
+        [{"Metric": res["Metric"], "AUROC": res["AUROC"]} for res in auroc_results]
+    )
+    auroc_df = auroc_df.sort_values(by="AUROC", ascending=False)
+    csv_path = output_folder / "auroc_results.csv"
+    auroc_df.to_csv(csv_path, index=False)
+    print(f"AUROC results saved to {csv_path}")
+
+    # Plot ROC curves for top 5 metrics
+    top_5_results = sorted(auroc_results, key=lambda x: x["AUROC"], reverse=True)[:5]
+    fig, ax = plt.subplots(figsize=(5, 5))
+    for res in top_5_results:
+        ax.plot(
+            res["FPR"],
+            res["TPR"],
+            label=f"{res['Metric']} (AUROC = {res['AUROC']:.2f})",
+        )
+    ax.plot([0, 1], [0, 1], "k--", label="Random (AUROC = 0.50)")
+    ax.set_xlabel("False Positive Rate", fontsize=12)
+    ax.set_ylabel("True Positive Rate", fontsize=12)
+    ax.set_title("ROC Curves for Top 5 Metrics by AUROC", fontsize=14)
+    ax.legend(loc="lower right", fontsize=10)
+    plt.tight_layout()
+    pdf_path = output_folder / "top_5_roc_curves.pdf"
+    plt.savefig(pdf_path)
+    plt.close()
+    print(f"ROC curves saved to {pdf_path}")
 
 
 def validate_required_columns(data: pd.DataFrame, database: str, metrics: list):
@@ -482,6 +636,25 @@ def main(args):
         save_dir=args.output_folder,
         color_by_kd=False,
     )
+
+    # Expression Analysis
+    metrics_expression = [
+        "aggrescan3d_avg_value",
+        "budeff_charge_per_aa",
+        "rosetta_hbond_sr_bb_per_aa",
+        "ss_prop_alpha_helix",
+        "isoelectric_point",
+        "charge",
+        "rosetta_lk_ball_wtd_per_aa",
+        "rosetta_fa_intra_sol_xover4_per_aa",
+        "packing_density",
+        "iptm",
+        "lddt_swissprot",
+        "evoef2_ref_total_per_aa",
+        "rosetta_fa_elec_per_aa",
+    ]
+    plot_expression_histogram(data, args.output_folder, metrics_expression)
+    calculate_and_plot_auroc(data, args.output_folder, metrics_expression)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+Metric,AUROC
+ss_prop_alpha_helix,0.7155469953775038
+rosetta_fa_intra_sol_xover4_per_aa,0.6692141756548535
+evoef2_ref_total_per_aa,0.6045762711864405
+iptm,0.5853004622496147
+lddt_swissprot,0.47921417565485364
+rosetta_fa_elec_per_aa,0.39642526964560865
+packing_density,0.38431432973805857
+rosetta_lk_ball_wtd_per_aa,0.33155624036979975
+charge,0.31283513097072424
+isoelectric_point,0.3097226502311249
+rosetta_hbond_sr_bb_per_aa,0.27993836671802774
+budeff_charge_per_aa,0.2547611710323575
+aggrescan3d_avg_value,0.22520801232665638
