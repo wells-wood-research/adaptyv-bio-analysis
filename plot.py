@@ -588,6 +588,8 @@ def main(args):
         "composition_ASN",
         "rosetta_hbond_lr_bb_per_aa",
         "rosetta_lk_ball_wtd_per_aa",
+        "rosetta_fa_intra_sol_xover4_per_aa",
+        "packing_density",
     ]
 
     validate_required_columns(data, args.database, metrics)
