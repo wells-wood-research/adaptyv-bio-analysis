@@ -472,6 +472,9 @@ def plot_expression_histogram(
     """Plot histograms of expression levels for high and low expression groups. """
 
     for metric in metrics:
+        # Check if metric is present in the dataset
+        if metric not in data.columns:
+            raise ValueError(f"Metric {metric} not found in the dataset.")
         # Extract metric
         high_group = data[data["expression_binary"] == 1][metric].dropna()
         not_high_group = data[data["expression_binary"] == 0][metric].dropna()
@@ -563,6 +566,127 @@ def calculate_and_plot_auroc(
     print(f"ROC curves saved to {pdf_path}")
 
 
+def plot_binding_histograms(
+    data: pd.DataFrame, output_folder: Path, metrics: t.List[str]
+):
+    """
+    Generate histograms comparing binding vs non-binding groups for each metric.
+
+    Parameters
+    ----------
+    data: pd.DataFrame
+        Input dataset.
+    output_folder: Path
+        Folder to save plots.
+    metrics: list
+        List of metrics to compare.
+    """
+    for metric in metrics:
+        if metric not in data.columns:
+            print(f"Skipping {metric}: not found in data.")
+            continue
+
+        binding_true = data[data["binding"] == "TRUE"][metric].dropna()
+        binding_false = data[data["binding"] == "FALSE"][metric].dropna()
+
+        if binding_true.empty or binding_false.empty:
+            print(
+                f"Skipping {metric}: insufficient data for binding/non-binding groups."
+            )
+            continue
+
+        # Create KDE plots
+        fig, ax = plt.subplots(figsize=(6, 5))
+        sns.kdeplot(
+            binding_true,
+            fill=True,
+            color="skyblue",
+            label="Binding (TRUE)",
+            alpha=0.5,
+            ax=ax,
+        )
+        sns.kdeplot(
+            binding_false,
+            fill=True,
+            color="darkorange",
+            label="Binding (FALSE)",
+            alpha=0.5,
+            ax=ax,
+        )
+        ax.set_xlabel(metric, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.set_title(f"{metric} Distribution by Binding Status", fontsize=14)
+        ax.legend()
+        ax.grid(alpha=0.5)
+        plt.tight_layout()
+
+        # Save plot
+        plot_path = output_folder / f"binding_histogram_{metric}.pdf"
+        plt.savefig(plot_path)
+        plt.close()
+        print(f"Histogram for {metric} saved to {plot_path}")
+
+
+def calculate_and_plot_binding_auroc(
+    data: pd.DataFrame, output_folder: Path, metrics: t.List[str]
+):
+    """
+    Calculate AUROC for binding vs non-binding and plot ROC curves.
+
+    Parameters
+    ----------
+    data: pd.DataFrame
+        Input dataset.
+    output_folder: Path
+        Folder to save AUROC results and plots.
+    metrics: list
+        List of metrics to evaluate.
+    """
+    auroc_results = []
+
+    for metric in metrics:
+        # Drop NaN values and ensure alignment between true labels and scores
+        valid_data = data[["binding", metric]].dropna()
+        # Drop binding "unknown" values
+        valid_data = valid_data[valid_data["binding"] != "unknown"]
+        y_true = (valid_data["binding"] == "true").astype(int)  # Binary labels
+        y_score = valid_data[metric]
+
+        # Calculate AUROC and ROC curve
+        auroc = roc_auc_score(y_true, y_score)
+        fpr, tpr, _ = roc_curve(y_true, y_score)
+        auroc_results.append({"Metric": metric, "AUROC": auroc, "FPR": fpr, "TPR": tpr})
+
+    # Create results DataFrame and save to CSV
+    auroc_df = pd.DataFrame(
+        [{"Metric": res["Metric"], "AUROC": res["AUROC"]} for res in auroc_results]
+    )
+    auroc_df = auroc_df.sort_values(by="AUROC", ascending=False)
+    csv_path = output_folder / "binding_auroc_results.csv"
+    auroc_df.to_csv(csv_path, index=False)
+    print(f"Binding AUROC results saved to {csv_path}")
+
+    # Plot ROC curves for top 5 metrics
+    top_5_results = sorted(auroc_results, key=lambda x: x["AUROC"], reverse=True)[:5]
+    fig, ax = plt.subplots(figsize=(6, 5))
+    for res in top_5_results:
+        ax.plot(
+            res["FPR"],
+            res["TPR"],
+            label=f"{res['Metric']} (AUROC = {res['AUROC']:.2f})",
+        )
+    ax.plot([0, 1], [0, 1], "k--", label="Random (AUROC = 0.50)")
+    ax.set_xlabel("False Positive Rate", fontsize=12)
+    ax.set_ylabel("True Positive Rate", fontsize=12)
+    ax.set_title("ROC Curves for Top 5 Metrics by Binding Status", fontsize=14)
+    ax.legend(loc="lower right", fontsize=10)
+    plt.tight_layout()
+    pdf_path = output_folder / "binding_top_5_roc_curves.pdf"
+    plt.savefig(pdf_path)
+    plt.close()
+    print(f"Binding ROC curves saved to {pdf_path}")
+
+
 def main(args):
     args.input = Path(args.input)
     args.output_folder = Path(args.output_folder)
@@ -588,8 +712,6 @@ def main(args):
         "composition_ASN",
         "rosetta_hbond_lr_bb_per_aa",
         "rosetta_lk_ball_wtd_per_aa",
-        "rosetta_fa_intra_sol_xover4_per_aa",
-        "packing_density",
     ]
 
     validate_required_columns(data, args.database, metrics)
@@ -597,9 +719,25 @@ def main(args):
 
     for metric in metrics:
         plot_kd_vs_metric(data, metric, args.output_folder, args.database)
+    # Check if metric in dataset. If not, add _swissprot and _pdb - This is clunky but works
+    valid_metrics = []
+    for metric in metrics:
+        if metric in data.columns:
+            valid_metrics.append(metric)
+        else:
+            if f"{metric}_swissprot" in data.columns:
+                valid_metrics.append(f"{metric}_swissprot")
+            if f"{metric}_pdb" in data.columns:
+                valid_metrics.append(f"{metric}_pdb")
+    # Expression Analysis
+    plot_expression_histogram(data, args.output_folder, valid_metrics)
+    calculate_and_plot_auroc(data, args.output_folder, valid_metrics)
+    # Binding Analysis
+    plot_binding_histograms(data, args.output_folder, valid_metrics)
+    calculate_and_plot_binding_auroc(data, args.output_folder, valid_metrics)
 
+    # Embedding Analysis
     data = load_and_merge_embeddings(data, args.embeddings)
-
     # Visualize embeddings (all data)
     visualize_embeddings_interactive(
         df=data,
@@ -612,7 +750,6 @@ def main(args):
         perplexity=30,
         save_dir=args.output_folder,
     )
-
     # Binding only
     visualize_embeddings_interactive(
         df=data,
@@ -629,25 +766,6 @@ def main(args):
         save_dir=args.output_folder,
         color_by_kd=False,
     )
-
-    # Expression Analysis
-    metrics_expression = [
-        "aggrescan3d_avg_value",
-        "budeff_charge_per_aa",
-        "rosetta_hbond_sr_bb_per_aa",
-        "ss_prop_alpha_helix",
-        "isoelectric_point",
-        "charge",
-        "rosetta_lk_ball_wtd_per_aa",
-        "rosetta_fa_intra_sol_xover4_per_aa",
-        "packing_density",
-        "iptm",
-        "lddt_swissprot",
-        "evoef2_ref_total_per_aa",
-        "rosetta_fa_elec_per_aa",
-    ]
-    plot_expression_histogram(data, args.output_folder, metrics_expression)
-    calculate_and_plot_auroc(data, args.output_folder, metrics_expression)
 
 
 if __name__ == "__main__":
