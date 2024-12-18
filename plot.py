@@ -362,12 +362,16 @@ def visualize_embeddings_interactive(
     save_dir: str = ".",
     filter_binding: bool = False,
     color_by_kd: bool = False,
+    color_by_expression: bool = False,
 ):
     """
-    Interactive visualization of protein embeddings with optional coloring by -log10(kd) or design_type.
+    Interactive visualization of protein embeddings with optional coloring by -log10(kd), design_type, or expression_binary.
     """
     if filter_binding:
         df = df[df["binding"] == "TRUE"]
+        suffix = "_binding"
+    else:
+        suffix = ""
     df = df.copy()
 
     # Set the color column
@@ -376,6 +380,12 @@ def visualize_embeddings_interactive(
             raise ValueError("Cannot color by kd: 'kd' column missing or not numeric.")
         df["neg_log_kd"] = df["kd"].apply(lambda x: -np.log10(x) if x > 0 else np.nan)
         color_column = "neg_log_kd"
+    elif color_by_expression:
+        if "expression_binary" not in df.columns:
+            raise ValueError(
+                "Cannot color by expression: 'expression_binary' column missing."
+            )
+        color_column = "expression_binary"
     else:
         color_column = "design_type"
 
@@ -416,8 +426,13 @@ def visualize_embeddings_interactive(
         },
         hover_data=["name", "kd"] if "kd" in df.columns else ["name"],
         color_continuous_scale="viridis" if color_by_kd else None,
+        color_discrete_map={0: "#8E44AD", 1: "#27AE60"}
+        if color_by_expression
+        else None,
     )
-    html_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{color_column}.html")
+    html_path = os.path.join(
+        save_dir, f"esm2_3b_{method}_col_by_{color_column}{suffix}.html"
+    )
     fig.write_html(html_path)
     print(f"Interactive plot saved to {html_path}")
 
@@ -435,6 +450,39 @@ def visualize_embeddings_interactive(
         )
         cbar = plt.colorbar(scatter)
         cbar.set_label("-log10(kd)", fontsize=12)
+    elif color_by_expression:
+        # Binary: high (1) in red, low (0) in blue
+        colors = embeddings_df[color_column].map({0: "blue", 1: "red"})
+        plt.scatter(
+            embeddings_df["Component1"],
+            embeddings_df["Component2"],
+            c=colors,
+            alpha=0.7,
+            edgecolor="k",
+        )
+        plt.legend(
+            handles=[
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="Low Expression",
+                    markerfacecolor="blue",
+                    markersize=10,
+                ),
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="High Expression",
+                    markerfacecolor="red",
+                    markersize=10,
+                ),
+            ],
+            title="Expression Binary",
+        )
     else:
         # Categorical: plot each category separately
         unique_categories = embeddings_df[color_column].dropna().unique()
@@ -455,7 +503,9 @@ def visualize_embeddings_interactive(
     plt.xlabel("Component 1", fontsize=12)
     plt.ylabel("Component 2", fontsize=12)
     plt.grid(alpha=0.3)
-    pdf_path = os.path.join(save_dir, f"esm2_3b_{method}_col_by_{color_column}.pdf")
+    pdf_path = os.path.join(
+        save_dir, f"esm2_3b_{method}_col_by_{color_column}{suffix}.pdf"
+    )
     plt.savefig(pdf_path)
     print(f"Static plot saved to {pdf_path}")
     plt.close()
@@ -586,8 +636,8 @@ def plot_binding_histograms(
             print(f"Skipping {metric}: not found in data.")
             continue
 
-        binding_true = data[data["binding"] == "TRUE"][metric].dropna()
-        binding_false = data[data["binding"] == "FALSE"][metric].dropna()
+        binding_true = data[data["binding"] == "true"][metric].dropna()
+        binding_false = data[data["binding"] == "false"][metric].dropna()
 
         if binding_true.empty or binding_false.empty:
             print(
@@ -649,7 +699,7 @@ def calculate_and_plot_binding_auroc(
         valid_data = data[["binding", metric]].dropna()
         # Drop binding "unknown" values
         valid_data = valid_data[valid_data["binding"] != "unknown"]
-        y_true = (valid_data["binding"] == "true").astype(int)  # Binary labels
+        y_true = (valid_data["binding"] == "TRUE").astype(int)  # Binary labels
         y_score = valid_data[metric]
 
         # Calculate AUROC and ROC curve
@@ -712,6 +762,32 @@ def main(args):
         "composition_ASN",
         "rosetta_hbond_lr_bb_per_aa",
         "rosetta_lk_ball_wtd_per_aa",
+        "composition_LYS",
+        "composition_GLU",
+        "ss_prop_alpha_helix",
+        "isoelectric_point",
+        "budeff_charge_per_aa",
+        "num_residues",
+        "rosetta_fa_intra_sol_xover4_per_aa",
+        "aggrescan3d_avg_value",
+        "ss_prop_beta_strand",
+        "rosetta_hbond_sr_bb_per_aa",
+        "similarity_check",
+        "rosetta_hbond_bb_sc_per_aa_binder",
+        "evoef2_interS_total_per_aa_binder",
+        "composition_ASN_binder",
+        "rosetta_hbond_lr_bb_per_aa_binder",
+        "rosetta_lk_ball_wtd_per_aa_binder",
+        "composition_LYS_binder",
+        "composition_GLU_binder",
+        "ss_prop_alpha_helix_binder",
+        "isoelectric_point_binder",
+        "budeff_charge_per_aa_binder",
+        "num_residues_binder",
+        "rosetta_fa_intra_sol_xover4_per_aa_binder",
+        "aggrescan3d_avg_value_binder",
+        "ss_prop_beta_strand_binder",
+        "rosetta_hbond_sr_bb_per_aa_binder",
     ]
 
     validate_required_columns(data, args.database, metrics)
@@ -739,33 +815,34 @@ def main(args):
     # Embedding Analysis
     data = load_and_merge_embeddings(data, args.embeddings)
     # Visualize embeddings (all data)
-    visualize_embeddings_interactive(
-        df=data,
-        method="PCA",
-        save_dir=args.output_folder,
-    )
-    visualize_embeddings_interactive(
-        df=data,
-        method="t-SNE",
-        perplexity=30,
-        save_dir=args.output_folder,
-    )
-    # Binding only
-    visualize_embeddings_interactive(
-        df=data,
-        method="PCA",
-        save_dir=args.output_folder,
-        color_by_kd=True,
-    )
+    # Define combinations of parameters
+    methods = ["PCA", "t-SNE"]
+    color_by_options = [
+        {
+            "color_by_kd": False,
+            "color_by_expression": False,
+        },  # Default: color by design_type
+        {"color_by_kd": True, "color_by_expression": False},  # Color by kd
+        {
+            "color_by_kd": False,
+            "color_by_expression": True,
+        },  # Color by expression_binary
+    ]
+    filter_binding_options = [False, True]  # Include all data or filter by binding
 
-    # Color by design_type
-    visualize_embeddings_interactive(
-        df=data,
-        method="t-SNE",
-        perplexity=30,
-        save_dir=args.output_folder,
-        color_by_kd=False,
-    )
+    # Loop through combinations
+    for method in methods:
+        for color_by in color_by_options:
+            for filter_binding in filter_binding_options:
+                visualize_embeddings_interactive(
+                    df=data,
+                    method=method,
+                    perplexity=30 if method == "t-SNE" else None,
+                    save_dir=args.output_folder,
+                    filter_binding=filter_binding,
+                    **color_by,
+                    # Unpack color_by_kd and color_by_expression
+                )
 
 
 if __name__ == "__main__":
