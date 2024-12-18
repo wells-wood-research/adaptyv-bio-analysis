@@ -365,7 +365,7 @@ def visualize_embeddings_interactive(
     color_by_expression: bool = False,
 ):
     """
-    Interactive visualization of protein embeddings with optional coloring by -log10(kd), design_type, or expression_binary.
+    Interactive visualization of protein embeddings with optional coloring by -log10(kd), design_type, or expression.
     """
     if filter_binding:
         df = df[df["binding"] == "TRUE"]
@@ -381,11 +381,17 @@ def visualize_embeddings_interactive(
         df["neg_log_kd"] = df["kd"].apply(lambda x: -np.log10(x) if x > 0 else np.nan)
         color_column = "neg_log_kd"
     elif color_by_expression:
-        if "expression_binary" not in df.columns:
-            raise ValueError(
-                "Cannot color by expression: 'expression_binary' column missing."
-            )
-        color_column = "expression_binary"
+        if "expression" not in df.columns:
+            raise ValueError("Cannot color by expression: 'expression' column missing.")
+
+        # Bin the expression column
+        expression_map = {
+            "high": "High Expression",
+            "medium": "Other Expression",
+            "low": "Other Expression",
+        }
+        df["expression_binned"] = df["expression"].map(expression_map).fillna("None")
+        color_column = "expression_binned"
     else:
         color_column = "design_type"
 
@@ -413,6 +419,15 @@ def visualize_embeddings_interactive(
         embeddings_df["Cluster"] = kmeans.fit_predict(embeddings)
 
     # Plotly interactive plot
+    if color_by_expression:
+        color_discrete_map = {
+            "High Expression": "skyblue",
+            "Other Expression": "darkorange",
+            "None": "black",
+        }
+    else:
+        color_discrete_map = None
+
     fig = px.scatter(
         embeddings_df,
         x="Component1",
@@ -426,9 +441,7 @@ def visualize_embeddings_interactive(
         },
         hover_data=["name", "kd"] if "kd" in df.columns else ["name"],
         color_continuous_scale="viridis" if color_by_kd else None,
-        color_discrete_map={0: "#8E44AD", 1: "#27AE60"}
-        if color_by_expression
-        else None,
+        color_discrete_map=color_discrete_map,
     )
     html_path = os.path.join(
         save_dir, f"esm2_3b_{method}_col_by_{color_column}{suffix}.html"
@@ -451,8 +464,13 @@ def visualize_embeddings_interactive(
         cbar = plt.colorbar(scatter)
         cbar.set_label("-log10(kd)", fontsize=12)
     elif color_by_expression:
-        # Binary: high (1) in red, low (0) in blue
-        colors = embeddings_df[color_column].map({0: "blue", 1: "red"})
+        # Categorical: High Expression, Other Expression, None
+        color_map = {
+            "High Expression": "skyblue",
+            "Other Expression": "darkorange",
+            "None": "black",
+        }
+        colors = embeddings_df[color_column].map(color_map)
         plt.scatter(
             embeddings_df["Component1"],
             embeddings_df["Component2"],
@@ -467,8 +485,8 @@ def visualize_embeddings_interactive(
                     [0],
                     marker="o",
                     color="w",
-                    label="Low Expression",
-                    markerfacecolor="blue",
+                    label="High Expression",
+                    markerfacecolor="skyblue",
                     markersize=10,
                 ),
                 plt.Line2D(
@@ -476,17 +494,26 @@ def visualize_embeddings_interactive(
                     [0],
                     marker="o",
                     color="w",
-                    label="High Expression",
-                    markerfacecolor="red",
+                    label="Other Expression",
+                    markerfacecolor="darkorange",
+                    markersize=10,
+                ),
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="None",
+                    markerfacecolor="black",
                     markersize=10,
                 ),
             ],
-            title="Expression Binary",
+            title="Expression Levels",
         )
     else:
         # Categorical: plot each category separately
         unique_categories = embeddings_df[color_column].dropna().unique()
-        for idx, cat in enumerate(unique_categories):
+        for cat in unique_categories:
             subset = embeddings_df[embeddings_df[color_column] == cat]
             plt.scatter(
                 subset["Component1"],
@@ -495,7 +522,7 @@ def visualize_embeddings_interactive(
                 alpha=0.7,
                 edgecolor="k",
             )
-        plt.legend(title="Design Type", loc="best")
+        plt.legend(title=color_column, loc="best")
 
     plt.title(
         f"{method} Visualization of Protein Embeddings ({color_column})", fontsize=14
@@ -514,6 +541,7 @@ def visualize_embeddings_interactive(
         print(f"Explained variance ratio: {reducer.explained_variance_ratio_}")
 
     return embeddings_df
+
 
 
 def plot_expression_histogram(
@@ -793,8 +821,8 @@ def main(args):
     validate_required_columns(data, args.database, metrics)
     compute_correlations(data, args.output_folder)
 
-    for metric in metrics:
-        plot_kd_vs_metric(data, metric, args.output_folder, args.database)
+    # for metric in metrics:
+    #     plot_kd_vs_metric(data, metric, args.output_folder, args.database)
     # Check if metric in dataset. If not, add _swissprot and _pdb - This is clunky but works
     valid_metrics = []
     for metric in metrics:
@@ -806,11 +834,11 @@ def main(args):
             if f"{metric}_pdb" in data.columns:
                 valid_metrics.append(f"{metric}_pdb")
     # Expression Analysis
-    plot_expression_histogram(data, args.output_folder, valid_metrics)
-    calculate_and_plot_auroc(data, args.output_folder, valid_metrics)
-    # Binding Analysis
-    plot_binding_histograms(data, args.output_folder, valid_metrics)
-    calculate_and_plot_binding_auroc(data, args.output_folder, valid_metrics)
+    # plot_expression_histogram(data, args.output_folder, valid_metrics)
+    # calculate_and_plot_auroc(data, args.output_folder, valid_metrics)
+    # # Binding Analysis
+    # plot_binding_histograms(data, args.output_folder, valid_metrics)
+    # calculate_and_plot_binding_auroc(data, args.output_folder, valid_metrics)
 
     # Embedding Analysis
     data = load_and_merge_embeddings(data, args.embeddings)
