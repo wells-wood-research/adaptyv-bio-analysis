@@ -13,6 +13,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.feature_selection import mutual_info_regression
 
 
 def validate_required_columns(
@@ -764,6 +765,68 @@ def calculate_and_plot_binding_auroc(
     print(f"Binding ROC curves saved to {pdf_path}")
 
 
+def calculate_mutual_information(
+    data: pd.DataFrame, metrics: t.List[str], output_folder: Path
+) -> None:
+    """
+    Calculate mutual information between all metrics and save the top 10 pairs for each metric.
+
+    Parameters
+    ----------
+    data: pd.DataFrame
+        Input dataset with metrics.
+    metrics: list
+        List of metrics to calculate mutual information.
+    output_folder: Path
+        Folder to save mutual information results.
+    """
+    # Filter to ensure metrics are numeric and exist in the data
+    numeric_metrics = [
+        metric
+        for metric in metrics
+        if metric in data.columns and pd.api.types.is_numeric_dtype(data[metric])
+    ]
+
+    # Sort metrics alphabetically
+    numeric_metrics.sort()
+
+    # Initialize results container
+    mutual_info_results = []
+
+    for target_metric in numeric_metrics:
+        mutual_info_scores = []
+        for other_metric in numeric_metrics:
+            if target_metric != other_metric:
+                # Drop NaNs for mutual information computation
+                combined_data = data[[target_metric, other_metric]].dropna()
+                if not combined_data.empty:
+                    mi_score = mutual_info_regression(
+                        combined_data[[other_metric]],
+                        combined_data[target_metric],
+                        discrete_features=False,
+                        random_state=42,
+                    )[0]
+                    mutual_info_scores.append((other_metric, mi_score))
+
+        # Sort and select top 10 metrics with highest mutual information
+        mutual_info_scores.sort(key=lambda x: x[1], reverse=True)
+        top_10 = mutual_info_scores[:10]
+        for metric, score in top_10:
+            mutual_info_results.append(
+                {
+                    "Target Metric": target_metric,
+                    "Compared Metric": metric,
+                    "Mutual Information": score,
+                }
+            )
+
+    # Save results to CSV
+    mi_results_df = pd.DataFrame(mutual_info_results)
+    mi_results_path = output_folder / "mutual_information_top10.csv"
+    mi_results_df.to_csv(mi_results_path, index=False)
+    print(f"Mutual information results saved to {mi_results_path}")
+
+
 def main(args):
     args.input = Path(args.input)
     args.output_folder = Path(args.output_folder)
@@ -819,60 +882,61 @@ def main(args):
         "iptm",
         "plddt",
     ]
-
+    # Normalise esm_pll by dividing by num_residues_binder
+    data["esm_pll"] = data["esm_pll"] / data["num_residues_binder"]
     validate_required_columns(data, args.database, metrics)
     compute_correlations(data, args.output_folder)
-
-    for metric in metrics:
-        plot_kd_vs_metric(data, metric, args.output_folder, args.database)
-    # Check if metric in dataset. If not, add _swissprot and _pdb - This is clunky but works
-    valid_metrics = []
-    for metric in metrics:
-        if metric in data.columns:
-            valid_metrics.append(metric)
-        else:
-            if f"{metric}_swissprot" in data.columns:
-                valid_metrics.append(f"{metric}_swissprot")
-            if f"{metric}_pdb" in data.columns:
-                valid_metrics.append(f"{metric}_pdb")
-    # Expression Analysis
-    plot_expression_histogram(data, args.output_folder, valid_metrics)
-    calculate_and_plot_auroc(data, args.output_folder, valid_metrics)
-    # Binding Analysis
-    plot_binding_histograms(data, args.output_folder, valid_metrics)
-    calculate_and_plot_binding_auroc(data, args.output_folder, valid_metrics)
-
-    # Embedding Analysis
-    data = load_and_merge_embeddings(data, args.embeddings)
-    # Visualize embeddings (all data)
-    # Define combinations of parameters
-    methods = ["PCA", "t-SNE"]
-    color_by_options = [
-        {
-            "color_by_kd": False,
-            "color_by_expression": False,
-        },  # Default: color by design_type
-        {"color_by_kd": True, "color_by_expression": False},  # Color by kd
-        {
-            "color_by_kd": False,
-            "color_by_expression": True,
-        },  # Color by expression_binary
-    ]
-    filter_binding_options = [False, True]  # Include all data or filter by binding
-
-    # Loop through combinations
-    for method in methods:
-        for color_by in color_by_options:
-            for filter_binding in filter_binding_options:
-                visualize_embeddings_interactive(
-                    df=data,
-                    method=method,
-                    perplexity=30 if method == "t-SNE" else None,
-                    save_dir=args.output_folder,
-                    filter_binding=filter_binding,
-                    **color_by,
-                    # Unpack color_by_kd and color_by_expression
-                )
+    calculate_mutual_information(data, metrics, args.output_folder)
+    # for metric in metrics:
+    #     plot_kd_vs_metric(data, metric, args.output_folder, args.database)
+    # # Check if metric in dataset. If not, add _swissprot and _pdb - This is clunky but works
+    # valid_metrics = []
+    # for metric in metrics:
+    #     if metric in data.columns:
+    #         valid_metrics.append(metric)
+    #     else:
+    #         if f"{metric}_swissprot" in data.columns:
+    #             valid_metrics.append(f"{metric}_swissprot")
+    #         if f"{metric}_pdb" in data.columns:
+    #             valid_metrics.append(f"{metric}_pdb")
+    # # Expression Analysis
+    # plot_expression_histogram(data, args.output_folder, valid_metrics)
+    # calculate_and_plot_auroc(data, args.output_folder, valid_metrics)
+    # # Binding Analysis
+    # plot_binding_histograms(data, args.output_folder, valid_metrics)
+    # calculate_and_plot_binding_auroc(data, args.output_folder, valid_metrics)
+    #
+    # # Embedding Analysis
+    # data = load_and_merge_embeddings(data, args.embeddings)
+    # # Visualize embeddings (all data)
+    # # Define combinations of parameters
+    # methods = ["PCA", "t-SNE"]
+    # color_by_options = [
+    #     {
+    #         "color_by_kd": False,
+    #         "color_by_expression": False,
+    #     },  # Default: color by design_type
+    #     {"color_by_kd": True, "color_by_expression": False},  # Color by kd
+    #     {
+    #         "color_by_kd": False,
+    #         "color_by_expression": True,
+    #     },  # Color by expression_binary
+    # ]
+    # filter_binding_options = [False, True]  # Include all data or filter by binding
+    #
+    # # Loop through combinations
+    # for method in methods:
+    #     for color_by in color_by_options:
+    #         for filter_binding in filter_binding_options:
+    #             visualize_embeddings_interactive(
+    #                 df=data,
+    #                 method=method,
+    #                 perplexity=30 if method == "t-SNE" else None,
+    #                 save_dir=args.output_folder,
+    #                 filter_binding=filter_binding,
+    #                 **color_by,
+    #                 # Unpack color_by_kd and color_by_expression
+    #             )
 
 
 if __name__ == "__main__":
