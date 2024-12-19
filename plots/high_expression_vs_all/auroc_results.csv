@@ -10,7 +10,10 @@ ss_prop_alpha_helix_binder,0.6719260400616333
 rosetta_fa_intra_sol_xover4_per_aa,0.6646726190476191
 rosetta_hbond_lr_bb_per_aa,0.6612797619047618
 rosetta_hbond_bb_sc_per_aa_binder,0.6166646047259681
+iptm,0.5824255952380952
 rosetta_hbond_bb_sc_per_aa,0.5775595238095238
+plddt,0.5479166666666666
+esm_pll,0.5235714285714286
 lddt_swissprot,0.47921417565485364
 lddt_pdb,0.4661633281972265
 composition_ASN,0.4659672619047619

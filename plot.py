@@ -543,7 +543,6 @@ def visualize_embeddings_interactive(
     return embeddings_df
 
 
-
 def plot_expression_histogram(
     data: pd.DataFrame, output_folder: Path, metrics: t.List[str]
 ):
@@ -664,8 +663,8 @@ def plot_binding_histograms(
             print(f"Skipping {metric}: not found in data.")
             continue
 
-        binding_true = data[data["binding"] == "true"][metric].dropna()
-        binding_false = data[data["binding"] == "false"][metric].dropna()
+        binding_true = data[data["binding"] == "TRUE"][metric].dropna()
+        binding_false = data[data["binding"] == "FALSE"][metric].dropna()
 
         if binding_true.empty or binding_false.empty:
             print(
@@ -816,13 +815,16 @@ def main(args):
         "aggrescan3d_avg_value_binder",
         "ss_prop_beta_strand_binder",
         "rosetta_hbond_sr_bb_per_aa_binder",
+        "esm_pll",
+        "iptm",
+        "plddt",
     ]
 
     validate_required_columns(data, args.database, metrics)
     compute_correlations(data, args.output_folder)
 
-    # for metric in metrics:
-    #     plot_kd_vs_metric(data, metric, args.output_folder, args.database)
+    for metric in metrics:
+        plot_kd_vs_metric(data, metric, args.output_folder, args.database)
     # Check if metric in dataset. If not, add _swissprot and _pdb - This is clunky but works
     valid_metrics = []
     for metric in metrics:
@@ -834,11 +836,11 @@ def main(args):
             if f"{metric}_pdb" in data.columns:
                 valid_metrics.append(f"{metric}_pdb")
     # Expression Analysis
-    # plot_expression_histogram(data, args.output_folder, valid_metrics)
-    # calculate_and_plot_auroc(data, args.output_folder, valid_metrics)
-    # # Binding Analysis
-    # plot_binding_histograms(data, args.output_folder, valid_metrics)
-    # calculate_and_plot_binding_auroc(data, args.output_folder, valid_metrics)
+    plot_expression_histogram(data, args.output_folder, valid_metrics)
+    calculate_and_plot_auroc(data, args.output_folder, valid_metrics)
+    # Binding Analysis
+    plot_binding_histograms(data, args.output_folder, valid_metrics)
+    calculate_and_plot_binding_auroc(data, args.output_folder, valid_metrics)
 
     # Embedding Analysis
     data = load_and_merge_embeddings(data, args.embeddings)
